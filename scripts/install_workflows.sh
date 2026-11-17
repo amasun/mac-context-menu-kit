@@ -327,11 +327,131 @@ create_workflow \
     "$FULL_SCRIPT" \
     "$TYPES_ALL"
 
-echo "✅ 已安装基础路径复制服务："
+TREE_SCRIPT='export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+/usr/bin/python3 - "$1" <<'\''PYEOF'\'' | pbcopy
+import os, sys
+
+target = sys.argv[1]
+root = target if os.path.isdir(target) and not target.endswith((".app", ".bundle", ".workflow")) else os.path.dirname(target)
+ignore = {".git", "node_modules", "dist", "build", ".next", ".nuxt", "__pycache__", ".venv", "venv", "Pods", "DerivedData", ".DS_Store"}
+lines = [os.path.basename(root.rstrip("/")) + "/"]
+count = 0
+max_entries = 300
+max_depth = 4
+
+def walk(path, prefix, depth):
+    global count
+    if depth >= max_depth or count >= max_entries:
+        return
+    try:
+        entries = [e for e in os.listdir(path) if not e.startswith(".") and e not in ignore]
+    except OSError:
+        return
+    entries.sort(key=lambda name: (not os.path.isdir(os.path.join(path, name)), name.lower()))
+    for idx, name in enumerate(entries):
+        if count >= max_entries:
+            break
+        count += 1
+        full = os.path.join(path, name)
+        is_dir = os.path.isdir(full) and not name.endswith((".app", ".bundle", ".workflow"))
+        is_last = idx == len(entries) - 1
+        lines.append(f"{prefix}{\"└── \" if is_last else \"├── \"}{name}{\"/\" if is_dir else \"\"}")
+        if is_dir:
+            walk(full, prefix + ("    " if is_last else "│   "), depth + 1)
+
+walk(root, "", 0)
+if count >= max_entries:
+    lines.append(f"... (已达到 {max_entries} 项上限)")
+sys.stdout.write("\n".join(lines))
+PYEOF'
+
+create_workflow \
+    "复制目录树（Tree）" \
+    "复制目录树（Tree）" \
+    "生成排除 node_modules/.git 等目录的树状结构并复制到剪贴板" \
+    "$TREE_SCRIPT" \
+    "$TYPES_ALL"
+
+MD_CONTEXT_SCRIPT='export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+/usr/bin/python3 - "$@" <<'\''PYEOF'\'' | pbcopy
+import os, sys
+
+ignore = {".git", "node_modules", "dist", "build", ".next", "__pycache__", ".venv", "venv", "Pods", "DerivedData", ".DS_Store"}
+files = []
+for arg in sys.argv[1:]:
+    if os.path.isdir(arg) and not arg.endswith((".app", ".bundle", ".workflow")):
+        for root, dirs, names in os.walk(arg):
+            dirs[:] = sorted([d for d in dirs if not d.startswith(".") and d not in ignore])
+            for n in sorted(names):
+                if not n.startswith("."):
+                    files.append(os.path.join(root, n))
+                if len(files) >= 30:
+                    break
+            if len(files) >= 30:
+                break
+    elif os.path.isfile(arg):
+        files.append(arg)
+    if len(files) >= 30:
+        break
+
+blocks = []
+total = 0
+for fp in files:
+    try:
+        size = os.path.getsize(fp)
+        if size > 150 * 1024 or total + size > 512 * 1024:
+            continue
+        with open(fp, "rb") as f:
+            raw = f.read()
+        if b"\x00" in raw:
+            continue
+        text = raw.decode("utf-8")
+    except Exception:
+        continue
+    total += size
+    ext = os.path.splitext(fp)[1].lstrip(".").lower()
+    blocks.append(f"### {os.path.basename(fp)}\n```{ext}\n{text}\n```")
+
+sys.stdout.write("\n\n".join(blocks) if blocks else "⚠️ 未找到可读取的文本/代码文件")
+PYEOF'
+
+create_workflow \
+    "复制为 AI 上下文（Markdown）" \
+    "复制为 AI 上下文（Markdown）" \
+    "将选中的代码文件打包为 Markdown 代码块上下文并复制到剪贴板" \
+    "$MD_CONTEXT_SCRIPT" \
+    "$TYPES_ALL"
+
+echo "✅ 已安装基础路径与 AI 上下文服务："
 echo "   • 复制所在目录路径"
 echo "   • 复制完整路径（含文件名）"
+echo "   • 复制目录树（Tree）"
+echo "   • 复制为 AI 上下文（Markdown）"
 echo ""
-echo "🔍 正在检测本机已安装的 IDE / AI 应用..."
+echo "🔍 正在检测本机已安装的终端、IDE 与 AI 工具..."
+
+# 终端自动检测
+TERM_APP=""
+for candidate in "/Applications/Ghostty.app" "/Applications/Warp.app" "/Applications/iTerm.app" "/System/Applications/Utilities/Terminal.app"; do
+    if [[ -d "$candidate" ]]; then
+        TERM_APP="$candidate"
+        break
+    fi
+done
+if [[ -n "$TERM_APP" ]]; then
+    TERM_SCRIPT="f=\"\$1\"
+[ ! -d \"\$f\" ] &amp;&amp; f=\"\$(dirname \"\$f\")\"
+open -a \"$TERM_APP\" \"\$f\""
+    create_workflow \
+        "在终端中打开" \
+        "在终端中打开" \
+        "在终端中打开当前目录" \
+        "$TERM_SCRIPT" \
+        "$TYPES_ALL"
+    echo "   ✓ 检测到终端 ($TERM_APP) → 已安装「在终端中打开」"
+fi
 
 # 2. Antigravity IDE
 if AGY_APP="$(detect_app "Antigravity IDE" "Antigravity")"; then
@@ -391,22 +511,33 @@ else
     echo "   - 未检测到 Claude，已跳过"
 fi
 
-# 5. Codex
-if CODEX_APP="$(detect_app "Codex")"; then
-    CODEX_SCRIPT="for f in \"\$@\"
+# 5. Cursor / Windsurf / Zed / Trae / Codex
+for app_spec in \
+    "Cursor|Open with Cursor|使用 Cursor 打开" \
+    "Windsurf|Open with Windsurf|使用 Windsurf 打开" \
+    "Zed|Open with Zed|使用 Zed 打开" \
+    "Trae|Open with Trae|使用 Trae 打开" \
+    "Codex|Open with Codex|使用 Codex 打开"; do
+    app_name="${app_spec%%|*}"
+    rest="${app_spec#*|}"
+    wf_name="${rest%%|*}"
+    menu_title="${rest#*|}"
+    if FOUND_APP="$(detect_app "$app_name")"; then
+        APP_SCRIPT="for f in \"\$@\"
 do
-    open -a \"$CODEX_APP\" \"\$f\"
+    open -a \"$FOUND_APP\" \"\$f\"
 done"
-    create_workflow \
-        "Open with Codex" \
-        "使用 Codex 打开" \
-        "在 Codex 中打开选中的项" \
-        "$CODEX_SCRIPT" \
-        "$TYPES_ALL"
-    echo "   ✓ 检测到 Codex ($CODEX_APP) → 已安装「使用 Codex 打开」"
-else
-    echo "   - 未检测到 Codex，已跳过"
-fi
+        create_workflow \
+            "$wf_name" \
+            "$menu_title" \
+            "在 ${app_name} 中打开选中的项" \
+            "$APP_SCRIPT" \
+            "$TYPES_ALL"
+        echo "   ✓ 检测到 ${app_name} ($FOUND_APP) → 已安装「${menu_title}」"
+    else
+        echo "   - 未检测到 ${app_name}，已跳过"
+    fi
+done
 
 /System/Library/CoreServices/pbs -flush 2>/dev/null || true
 /System/Library/CoreServices/pbs -update 2>/dev/null || true

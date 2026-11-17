@@ -7,31 +7,40 @@ private let logger = Logger(subsystem: "com.amasun.CopyPathFinder.Extension", ca
 @objc(FinderSyncExtension)
 final class FinderSyncExtension: FIFinderSync {
     private struct AppTarget {
-        let name: String
+        let menuTitle: String
         let bundleIDs: [String]
         let fallbackPaths: [String]
+        let symbolName: String
     }
 
-    private let antigravityTarget = AppTarget(
-        name: "Antigravity IDE",
-        bundleIDs: ["com.google.antigravity-ide", "com.google.antigravity"],
-        fallbackPaths: ["/Applications/Antigravity IDE.app", "/Applications/Antigravity.app"]
-    )
-    private let vscodeTarget = AppTarget(
-        name: "VS Code",
-        bundleIDs: ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"],
-        fallbackPaths: ["/Applications/Visual Studio Code.app", "/Applications/Visual Studio Code - Insiders.app"]
-    )
+    private let terminalTargets: [AppTarget] = [
+        AppTarget(menuTitle: "在 Ghostty 中打开", bundleIDs: ["com.mitchellh.ghostty"], fallbackPaths: ["/Applications/Ghostty.app"], symbolName: "terminal"),
+        AppTarget(menuTitle: "在 Warp 中打开", bundleIDs: ["dev.warp.Warp-Stable"], fallbackPaths: ["/Applications/Warp.app"], symbolName: "terminal"),
+        AppTarget(menuTitle: "在 iTerm2 中打开", bundleIDs: ["com.googlecode.iterm2"], fallbackPaths: ["/Applications/iTerm.app"], symbolName: "terminal"),
+        AppTarget(menuTitle: "在终端（Terminal）中打开", bundleIDs: ["com.apple.Terminal"], fallbackPaths: ["/System/Applications/Utilities/Terminal.app"], symbolName: "terminal")
+    ]
+
+    private let ideTargets: [AppTarget] = [
+        AppTarget(menuTitle: "使用 Antigravity IDE 打开", bundleIDs: ["com.google.antigravity-ide", "com.google.antigravity"], fallbackPaths: ["/Applications/Antigravity IDE.app", "/Applications/Antigravity.app"], symbolName: "sparkles"),
+        AppTarget(menuTitle: "使用 VS Code 打开", bundleIDs: ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"], fallbackPaths: ["/Applications/Visual Studio Code.app", "/Applications/Visual Studio Code - Insiders.app"], symbolName: "curlybraces"),
+        AppTarget(menuTitle: "使用 Cursor 打开", bundleIDs: ["com.todesktop.230313mzl4w4u92"], fallbackPaths: ["/Applications/Cursor.app"], symbolName: "cursorarrow.rays"),
+        AppTarget(menuTitle: "使用 Windsurf 打开", bundleIDs: ["com.exafunction.windsurf"], fallbackPaths: ["/Applications/Windsurf.app"], symbolName: "wind"),
+        AppTarget(menuTitle: "使用 Zed 打开", bundleIDs: ["dev.zed.Zed"], fallbackPaths: ["/Applications/Zed.app"], symbolName: "chevron.left.forwardslash.chevron.right"),
+        AppTarget(menuTitle: "使用 Trae 打开", bundleIDs: ["com.trae.app"], fallbackPaths: ["/Applications/Trae.app"], symbolName: "wand.and.stars"),
+        AppTarget(menuTitle: "使用 Codex 打开", bundleIDs: ["com.openai.codex"], fallbackPaths: ["/Applications/Codex.app"], symbolName: "cpu")
+    ]
+
     private let claudeTarget = AppTarget(
-        name: "Claude",
+        menuTitle: "Claude",
         bundleIDs: ["com.anthropic.claudefordesktop"],
-        fallbackPaths: ["/Applications/Claude.app"]
+        fallbackPaths: ["/Applications/Claude.app"],
+        symbolName: "paperplane"
     )
-    private let codexTarget = AppTarget(
-        name: "Codex",
-        bundleIDs: ["com.openai.codex"],
-        fallbackPaths: ["/Applications/Codex.app"]
-    )
+
+    private let ignoredDirectoryNames: Set<String> = [
+        ".git", "node_modules", "dist", "build", ".next", ".nuxt",
+        "__pycache__", ".venv", "venv", "Pods", "DerivedData", ".DS_Store", ".Trash"
+    ]
 
     override init() {
         super.init()
@@ -70,91 +79,91 @@ final class FinderSyncExtension: FIFinderSync {
         let target = FIFinderSyncController.default().targetedURL()
         let activeURLs = !selected.isEmpty ? selected : (target.map { [$0] } ?? [])
 
+        // 1. 高频路径复制（一级菜单直接显示）
         if !selected.isEmpty {
-            let copyDirItem = NSMenuItem(
-                title: "复制所在目录路径",
-                action: #selector(copyDirectoryPath(_:)),
-                keyEquivalent: ""
-            )
+            let copyDirItem = NSMenuItem(title: "复制所在目录路径", action: #selector(copyDirectoryPath(_:)), keyEquivalent: "")
             copyDirItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
             menu.addItem(copyDirItem)
 
-            let copyFullItem = NSMenuItem(
-                title: "复制完整路径（含文件名）",
-                action: #selector(copyFullPath(_:)),
-                keyEquivalent: ""
-            )
+            let copyFullItem = NSMenuItem(title: "复制完整路径（含文件名）", action: #selector(copyFullPath(_:)), keyEquivalent: "")
             copyFullItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
             menu.addItem(copyFullItem)
         } else if target != nil {
-            let copyCurrentDirItem = NSMenuItem(
-                title: "复制当前文件夹路径",
-                action: #selector(copyDirectoryPath(_:)),
-                keyEquivalent: ""
-            )
+            let copyCurrentDirItem = NSMenuItem(title: "复制当前文件夹路径", action: #selector(copyDirectoryPath(_:)), keyEquivalent: "")
             copyCurrentDirItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
             menu.addItem(copyCurrentDirItem)
         }
 
-        if !activeURLs.isEmpty {
-            var appItems: [NSMenuItem] = []
+        guard !activeURLs.isEmpty else {
+            return menu.items.isEmpty ? nil : menu
+        }
 
-            if findApplicationURL(for: antigravityTarget) != nil {
-                let item = NSMenuItem(
-                    title: "使用 Antigravity IDE 打开",
-                    action: #selector(openWithAntigravity(_:)),
-                    keyEquivalent: ""
-                )
-                item.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-                appItems.append(item)
+        menu.addItem(NSMenuItem.separator())
+
+        // 2. AI 上下文子菜单
+        let aiContextSubmenu = NSMenu(title: "AI 上下文")
+
+        let treeItem = NSMenuItem(title: "复制目录树（Tree）", action: #selector(copyDirectoryTree(_:)), keyEquivalent: "")
+        treeItem.image = NSImage(systemSymbolName: "list.bullet.indent", accessibilityDescription: nil)
+        aiContextSubmenu.addItem(treeItem)
+
+        let markdownItem = NSMenuItem(title: "复制为 AI 上下文（Markdown）", action: #selector(copyMarkdownContext(_:)), keyEquivalent: "")
+        markdownItem.image = NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: nil)
+        aiContextSubmenu.addItem(markdownItem)
+
+        let relPathItem = NSMenuItem(title: "复制 Git 相对路径", action: #selector(copyGitRelativePath(_:)), keyEquivalent: "")
+        relPathItem.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)
+        aiContextSubmenu.addItem(relPathItem)
+
+        let aiContextMenuItem = NSMenuItem(title: "AI 上下文", action: nil, keyEquivalent: "")
+        aiContextMenuItem.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: nil)
+        aiContextMenuItem.submenu = aiContextSubmenu
+        menu.addItem(aiContextMenuItem)
+
+        // 3. 在开发工具中打开子菜单（自动检测本机已安装应用）
+        let openWithSubmenu = NSMenu(title: "在开发工具中打开")
+
+        for (index, term) in terminalTargets.enumerated() {
+            if findApplicationURL(for: term) != nil {
+                let item = NSMenuItem(title: term.menuTitle, action: #selector(openInDetectedTerminal(_:)), keyEquivalent: "")
+                item.tag = index
+                item.image = NSImage(systemSymbolName: term.symbolName, accessibilityDescription: nil)
+                openWithSubmenu.addItem(item)
             }
+        }
 
-            if findApplicationURL(for: vscodeTarget) != nil {
-                let item = NSMenuItem(
-                    title: "使用 VS Code 打开",
-                    action: #selector(openWithVSCode(_:)),
-                    keyEquivalent: ""
-                )
-                item.image = NSImage(systemSymbolName: "curlybraces", accessibilityDescription: nil)
-                appItems.append(item)
+        if openWithSubmenu.items.count > 0 {
+            openWithSubmenu.addItem(NSMenuItem.separator())
+        }
+
+        for (index, ide) in ideTargets.enumerated() {
+            if findApplicationURL(for: ide) != nil {
+                let item = NSMenuItem(title: ide.menuTitle, action: #selector(openInDetectedIDE(_:)), keyEquivalent: "")
+                item.tag = index
+                item.image = NSImage(systemSymbolName: ide.symbolName, accessibilityDescription: nil)
+                openWithSubmenu.addItem(item)
             }
+        }
 
-            if findApplicationURL(for: codexTarget) != nil {
-                let item = NSMenuItem(
-                    title: "使用 Codex 打开",
-                    action: #selector(openWithCodex(_:)),
-                    keyEquivalent: ""
-                )
-                item.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
-                appItems.append(item)
+        if findApplicationURL(for: claudeTarget) != nil {
+            openWithSubmenu.addItem(NSMenuItem.separator())
+
+            let sendItem = NSMenuItem(title: "发送到 Claude", action: #selector(sendToClaude(_:)), keyEquivalent: "")
+            sendItem.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)
+            openWithSubmenu.addItem(sendItem)
+
+            if let first = activeURLs.first, isRegularDirectory(first) {
+                let codeItem = NSMenuItem(title: "在此新建 Claude Code 会话", action: #selector(openClaudeCodeHere(_:)), keyEquivalent: "")
+                codeItem.image = NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: nil)
+                openWithSubmenu.addItem(codeItem)
             }
+        }
 
-            if findApplicationURL(for: claudeTarget) != nil {
-                let sendItem = NSMenuItem(
-                    title: "发送到 Claude",
-                    action: #selector(sendToClaude(_:)),
-                    keyEquivalent: ""
-                )
-                sendItem.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)
-                appItems.append(sendItem)
-
-                if let first = activeURLs.first, isRegularDirectory(first) {
-                    let codeItem = NSMenuItem(
-                        title: "在此新建 Claude Code 会话",
-                        action: #selector(openClaudeCodeHere(_:)),
-                        keyEquivalent: ""
-                    )
-                    codeItem.image = NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: nil)
-                    appItems.append(codeItem)
-                }
-            }
-
-            if !appItems.isEmpty {
-                menu.addItem(NSMenuItem.separator())
-                for item in appItems {
-                    menu.addItem(item)
-                }
-            }
+        if !openWithSubmenu.items.isEmpty {
+            let openWithMenuItem = NSMenuItem(title: "在开发工具中打开", action: nil, keyEquivalent: "")
+            openWithMenuItem.image = NSImage(systemSymbolName: "hammer", accessibilityDescription: nil)
+            openWithMenuItem.submenu = openWithSubmenu
+            menu.addItem(openWithMenuItem)
         }
 
         return menu.items.isEmpty ? nil : menu
@@ -187,33 +196,104 @@ final class FinderSyncExtension: FIFinderSync {
     }
 
     @objc private func copyFullPath(_ sender: AnyObject?) {
-        let controller = FIFinderSyncController.default()
-        let selected = controller.selectedItemURLs() ?? []
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty else { return }
+        copyToPasteboard(urls.map { normalizedPath($0) }.joined(separator: "\n"))
+    }
 
-        let paths: [String]
-        if !selected.isEmpty {
-            paths = selected.map { normalizedPath($0) }
-        } else if let target = controller.targetedURL() {
-            paths = [normalizedPath(target)]
-        } else {
+    @objc private func copyGitRelativePath(_ sender: AnyObject?) {
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty else { return }
+        let paths = urls.map { relativeToGitRootOrName(for: $0) }
+        copyToPasteboard(paths.joined(separator: "\n"))
+    }
+
+    // MARK: - AI Context Actions
+
+    @objc private func copyDirectoryTree(_ sender: AnyObject?) {
+        let urls = activeTargetURLs()
+        guard let first = urls.first else { return }
+
+        let rootURL = isRegularDirectory(first) ? first : first.deletingLastPathComponent()
+        var lines: [String] = ["\(rootURL.lastPathComponent)/"]
+        var count = 0
+        let maxEntries = 300
+        let maxDepth = 4
+
+        buildTree(at: rootURL, prefix: "", depth: 0, maxDepth: maxDepth, maxEntries: maxEntries, count: &count, lines: &lines)
+        if count >= maxEntries {
+            lines.append("... (已达到 \(maxEntries) 项上限，部分内容已省略)")
+        }
+
+        copyToPasteboard(lines.joined(separator: "\n"))
+    }
+
+    @objc private func copyMarkdownContext(_ sender: AnyObject?) {
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty else { return }
+
+        var collectedFiles: [URL] = []
+        for url in urls {
+            if isRegularDirectory(url) {
+                collectTextFiles(in: url, depth: 0, maxDepth: 3, maxFiles: 30, into: &collectedFiles)
+            } else {
+                collectedFiles.append(url)
+            }
+            if collectedFiles.count >= 30 {
+                break
+            }
+        }
+
+        var blocks: [String] = []
+        var totalBytes = 0
+        let maxSingleFileBytes = 150 * 1024
+        let maxTotalBytes = 512 * 1024
+
+        for fileURL in collectedFiles {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                  let fileSize = attrs[.size] as? Int,
+                  fileSize <= maxSingleFileBytes,
+                  totalBytes + fileSize <= maxTotalBytes,
+                  let data = try? Data(contentsOf: fileURL),
+                  !data.contains(0),
+                  let content = String(data: data, encoding: .utf8) else {
+                continue
+            }
+
+            totalBytes += fileSize
+            let displayPath = relativeToGitRootOrName(for: fileURL)
+            let lang = fileURL.pathExtension.lowercased()
+            blocks.append("### \(displayPath)\n```\(lang)\n\(content)\n```")
+        }
+
+        guard !blocks.isEmpty else {
+            copyToPasteboard("⚠️ 未找到可读取的文本/代码文件（已跳过二进制或超大文件）")
             return
         }
 
-        copyToPasteboard(paths.joined(separator: "\n"))
+        copyToPasteboard(blocks.joined(separator: "\n\n"))
     }
 
     // MARK: - Open With App Actions
 
-    @objc private func openWithAntigravity(_ sender: AnyObject?) {
-        openActiveItems(with: antigravityTarget)
+    @objc private func openInDetectedTerminal(_ sender: NSMenuItem) {
+        let index = sender.tag
+        guard terminalTargets.indices.contains(index) else { return }
+        let target = terminalTargets[index]
+        let urls = activeTargetURLs()
+        guard let first = urls.first, let appURL = findApplicationURL(for: target) else { return }
+
+        let dirURL = isRegularDirectory(first) ? first : first.deletingLastPathComponent()
+        openURLs([dirURL], withApplicationAt: appURL, name: target.menuTitle)
     }
 
-    @objc private func openWithVSCode(_ sender: AnyObject?) {
-        openActiveItems(with: vscodeTarget)
-    }
-
-    @objc private func openWithCodex(_ sender: AnyObject?) {
-        openActiveItems(with: codexTarget)
+    @objc private func openInDetectedIDE(_ sender: NSMenuItem) {
+        let index = sender.tag
+        guard ideTargets.indices.contains(index) else { return }
+        let target = ideTargets[index]
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty, let appURL = findApplicationURL(for: target) else { return }
+        openURLs(urls, withApplicationAt: appURL, name: target.menuTitle)
     }
 
     @objc private func sendToClaude(_ sender: AnyObject?) {
@@ -247,6 +327,89 @@ final class FinderSyncExtension: FIFinderSync {
 
     // MARK: - Helpers
 
+    private func buildTree(
+        at url: URL,
+        prefix: String,
+        depth: Int,
+        maxDepth: Int,
+        maxEntries: Int,
+        count: inout Int,
+        lines: inout [String]
+    ) {
+        guard depth < maxDepth, count < maxEntries else { return }
+
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+            return
+        }
+
+        let filtered = contents
+            .filter { !ignoredDirectoryNames.contains($0.lastPathComponent) }
+            .sorted { lhs, rhs in
+                let lDir = isRegularDirectory(lhs)
+                let rDir = isRegularDirectory(rhs)
+                if lDir != rDir { return lDir }
+                return lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent) == .orderedAscending
+            }
+
+        for (idx, item) in filtered.enumerated() {
+            if count >= maxEntries { break }
+            count += 1
+            let isLast = idx == filtered.count - 1
+            let connector = isLast ? "└── " : "├── "
+            let isDir = isRegularDirectory(item)
+            lines.append("\(prefix)\(connector)\(item.lastPathComponent)\(isDir ? "/" : "")")
+
+            if isDir {
+                let childPrefix = prefix + (isLast ? "    " : "│   ")
+                buildTree(at: item, prefix: childPrefix, depth: depth + 1, maxDepth: maxDepth, maxEntries: maxEntries, count: &count, lines: &lines)
+            }
+        }
+    }
+
+    private func collectTextFiles(in dirURL: URL, depth: Int, maxDepth: Int, maxFiles: Int, into results: inout [URL]) {
+        guard depth < maxDepth, results.count < maxFiles else { return }
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: dirURL, includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey], options: [.skipsHiddenFiles]) else {
+            return
+        }
+
+        let sorted = contents
+            .filter { !ignoredDirectoryNames.contains($0.lastPathComponent) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+        for item in sorted {
+            if results.count >= maxFiles { break }
+            if isRegularDirectory(item) {
+                collectTextFiles(in: item, depth: depth + 1, maxDepth: maxDepth, maxFiles: maxFiles, into: &results)
+            } else {
+                results.append(item)
+            }
+        }
+    }
+
+    private func relativeToGitRootOrName(for url: URL) -> String {
+        let targetPath = normalizedPath(url)
+        var cursor = isRegularDirectory(url) ? url : url.deletingLastPathComponent()
+
+        while cursor.path != "/" {
+            let gitDir = cursor.appendingPathComponent(".git")
+            if FileManager.default.fileExists(atPath: gitDir.path) {
+                let rootPath = normalizedPath(cursor)
+                if targetPath == rootPath {
+                    return url.lastPathComponent
+                }
+                let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+                if targetPath.hasPrefix(prefix) {
+                    return String(targetPath.dropFirst(prefix.count))
+                }
+            }
+            let parent = cursor.deletingLastPathComponent()
+            if parent.path == cursor.path { break }
+            cursor = parent
+        }
+        return url.lastPathComponent
+    }
+
     private func activeTargetURLs() -> [URL] {
         let controller = FIFinderSyncController.default()
         let selected = controller.selectedItemURLs() ?? []
@@ -273,17 +436,12 @@ final class FinderSyncExtension: FIFinderSync {
         return nil
     }
 
-    private func openActiveItems(with target: AppTarget) {
-        let urls = activeTargetURLs()
-        guard !urls.isEmpty, let appURL = findApplicationURL(for: target) else {
-            logger.error("Failed to locate app \(target.name, privacy: .public)")
-            return
-        }
+    private func openURLs(_ urls: [URL], withApplicationAt appURL: URL, name: String) {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: config) { _, error in
             if let error {
-                logger.error("Failed to open with \(target.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to open \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
     }

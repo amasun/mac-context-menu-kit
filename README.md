@@ -15,14 +15,19 @@ macOS 访达（Finder）右键菜单增强工具集 —— 同时提供 **原生
 | 外接磁盘（`/Volumes/*`） | 自动监听挂载/卸载并生效 | 原生支持 |
 | 全局快捷键绑定 | — | 支持在「系统设置 → 键盘 → 键盘快捷键 → 服务」中绑定 |
 
-### 2. IDE 与 AI 工具集成（自动检测本机已安装应用）
+### 2. Vibe Coding：AI 上下文一键打包
 
-无论是 **FinderSync 一级菜单**（运行时动态检测）还是 **系统「服务」工作流**（安装时自动检测），均会自动识别本机是否已安装对应应用，**仅显示或安装已存在的应用菜单**：
+- **复制目录树（Tree）**：自动忽略 `.git`、`node_modules`、`dist`、`build`、`.next`、`__pycache__`、`.venv` 等目录（最多 4 层 / 300 项），一键生成树状结构。
+- **复制为 AI 上下文（Markdown）**：自动提取选中文件或文件夹内的文本代码文件（跳过二进制与超大文件），按 `### path` + Markdown 代码块打包进剪贴板。
+- **复制 Git 相对路径**：自动向上查找 `.git` 根目录并计算相对路径（FinderSync 菜单提供）。
 
-- **Antigravity IDE**：使用 Antigravity IDE 打开
-- **Visual Studio Code**（含 Insiders）：使用 VS Code 打开
+### 3. 终端、IDE 与 AI 工具集成（自动检测本机已安装应用）
+
+无论是 **FinderSync 一级菜单**（使用二级子菜单折叠防膨胀，运行时动态检测）还是 **系统「服务」工作流**（安装时自动检测），均会自动识别本机是否已安装对应应用，**仅显示或安装已存在的应用菜单**：
+
+- **终端**：Ghostty、Warp、iTerm2、系统 Terminal.app
+- **IDE**：Antigravity IDE、Visual Studio Code（含 Insiders）、Cursor、Windsurf、Zed、Trae、Codex
 - **Claude**：发送到 Claude / 在此新建 Claude Code 会话
-- **Codex**：使用 Codex 打开（未安装则自动隐藏/跳过）
 
 ---
 
