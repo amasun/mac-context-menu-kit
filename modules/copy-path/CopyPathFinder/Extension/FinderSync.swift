@@ -6,6 +6,33 @@ private let logger = Logger(subsystem: "com.amasun.CopyPathFinder.Extension", ca
 
 @objc(FinderSyncExtension)
 final class FinderSyncExtension: FIFinderSync {
+    private struct AppTarget {
+        let name: String
+        let bundleIDs: [String]
+        let fallbackPaths: [String]
+    }
+
+    private let antigravityTarget = AppTarget(
+        name: "Antigravity IDE",
+        bundleIDs: ["com.google.antigravity-ide", "com.google.antigravity"],
+        fallbackPaths: ["/Applications/Antigravity IDE.app", "/Applications/Antigravity.app"]
+    )
+    private let vscodeTarget = AppTarget(
+        name: "VS Code",
+        bundleIDs: ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders"],
+        fallbackPaths: ["/Applications/Visual Studio Code.app", "/Applications/Visual Studio Code - Insiders.app"]
+    )
+    private let claudeTarget = AppTarget(
+        name: "Claude",
+        bundleIDs: ["com.anthropic.claudefordesktop"],
+        fallbackPaths: ["/Applications/Claude.app"]
+    )
+    private let codexTarget = AppTarget(
+        name: "Codex",
+        bundleIDs: ["com.openai.codex"],
+        fallbackPaths: ["/Applications/Codex.app"]
+    )
+
     override init() {
         super.init()
         updateMonitoredDirectories()
@@ -28,16 +55,9 @@ final class FinderSyncExtension: FIFinderSync {
             }
         }
         FIFinderSyncController.default().directoryURLs = urls
-        let paths = urls.map(\.path).sorted().joined(separator: ", ")
-        logger.notice("directoryURLs updated: \(paths, privacy: .public)")
-    }
-
-    override func beginObservingDirectory(at url: URL) {
-        logger.notice("beginObservingDirectory: \(url.path, privacy: .public)")
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
-        logger.notice("menu(for:) called with kind=\(menuKind.rawValue)")
         switch menuKind {
         case .contextualMenuForItems, .contextualMenuForContainer, .toolbarItemMenu:
             break
@@ -47,6 +67,8 @@ final class FinderSyncExtension: FIFinderSync {
 
         let menu = NSMenu(title: "")
         let selected = FIFinderSyncController.default().selectedItemURLs() ?? []
+        let target = FIFinderSyncController.default().targetedURL()
+        let activeURLs = !selected.isEmpty ? selected : (target.map { [$0] } ?? [])
 
         if !selected.isEmpty {
             let copyDirItem = NSMenuItem(
@@ -64,7 +86,7 @@ final class FinderSyncExtension: FIFinderSync {
             )
             copyFullItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
             menu.addItem(copyFullItem)
-        } else if FIFinderSyncController.default().targetedURL() != nil {
+        } else if target != nil {
             let copyCurrentDirItem = NSMenuItem(
                 title: "复制当前文件夹路径",
                 action: #selector(copyDirectoryPath(_:)),
@@ -74,8 +96,71 @@ final class FinderSyncExtension: FIFinderSync {
             menu.addItem(copyCurrentDirItem)
         }
 
+        if !activeURLs.isEmpty {
+            var appItems: [NSMenuItem] = []
+
+            if findApplicationURL(for: antigravityTarget) != nil {
+                let item = NSMenuItem(
+                    title: "使用 Antigravity IDE 打开",
+                    action: #selector(openWithAntigravity(_:)),
+                    keyEquivalent: ""
+                )
+                item.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+                appItems.append(item)
+            }
+
+            if findApplicationURL(for: vscodeTarget) != nil {
+                let item = NSMenuItem(
+                    title: "使用 VS Code 打开",
+                    action: #selector(openWithVSCode(_:)),
+                    keyEquivalent: ""
+                )
+                item.image = NSImage(systemSymbolName: "curlybraces", accessibilityDescription: nil)
+                appItems.append(item)
+            }
+
+            if findApplicationURL(for: codexTarget) != nil {
+                let item = NSMenuItem(
+                    title: "使用 Codex 打开",
+                    action: #selector(openWithCodex(_:)),
+                    keyEquivalent: ""
+                )
+                item.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+                appItems.append(item)
+            }
+
+            if findApplicationURL(for: claudeTarget) != nil {
+                let sendItem = NSMenuItem(
+                    title: "发送到 Claude",
+                    action: #selector(sendToClaude(_:)),
+                    keyEquivalent: ""
+                )
+                sendItem.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)
+                appItems.append(sendItem)
+
+                if let first = activeURLs.first, isRegularDirectory(first) {
+                    let codeItem = NSMenuItem(
+                        title: "在此新建 Claude Code 会话",
+                        action: #selector(openClaudeCodeHere(_:)),
+                        keyEquivalent: ""
+                    )
+                    codeItem.image = NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: nil)
+                    appItems.append(codeItem)
+                }
+            }
+
+            if !appItems.isEmpty {
+                menu.addItem(NSMenuItem.separator())
+                for item in appItems {
+                    menu.addItem(item)
+                }
+            }
+        }
+
         return menu.items.isEmpty ? nil : menu
     }
+
+    // MARK: - Copy Path Actions
 
     @objc private func copyDirectoryPath(_ sender: AnyObject?) {
         let controller = FIFinderSyncController.default()
@@ -117,13 +202,102 @@ final class FinderSyncExtension: FIFinderSync {
         copyToPasteboard(paths.joined(separator: "\n"))
     }
 
-    private func directoryPath(for url: URL) -> String {
+    // MARK: - Open With App Actions
+
+    @objc private func openWithAntigravity(_ sender: AnyObject?) {
+        openActiveItems(with: antigravityTarget)
+    }
+
+    @objc private func openWithVSCode(_ sender: AnyObject?) {
+        openActiveItems(with: vscodeTarget)
+    }
+
+    @objc private func openWithCodex(_ sender: AnyObject?) {
+        openActiveItems(with: codexTarget)
+    }
+
+    @objc private func sendToClaude(_ sender: AnyObject?) {
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty else { return }
+
+        var queryParts: [String] = []
+        for url in urls.prefix(32) {
+            let key = isRegularDirectory(url) ? "folder" : "file"
+            let path = normalizedPath(url)
+            if let encoded = encodeQueryValue(path) {
+                queryParts.append("\(key)=\(encoded)")
+            }
+        }
+        guard !queryParts.isEmpty,
+              let deepLink = URL(string: "claude://cowork/new?source=services&\(queryParts.joined(separator: "&"))") else {
+            return
+        }
+        NSWorkspace.shared.open(deepLink)
+    }
+
+    @objc private func openClaudeCodeHere(_ sender: AnyObject?) {
+        guard let first = activeTargetURLs().first else { return }
+        let folderPath = directoryPath(for: first)
+        guard let encoded = encodeQueryValue(folderPath),
+              let deepLink = URL(string: "claude://code/new?folder=\(encoded)&source=services") else {
+            return
+        }
+        NSWorkspace.shared.open(deepLink)
+    }
+
+    // MARK: - Helpers
+
+    private func activeTargetURLs() -> [URL] {
+        let controller = FIFinderSyncController.default()
+        let selected = controller.selectedItemURLs() ?? []
+        if !selected.isEmpty {
+            return selected
+        }
+        if let target = controller.targetedURL() {
+            return [target]
+        }
+        return []
+    }
+
+    private func findApplicationURL(for target: AppTarget) -> URL? {
+        for bundleID in target.bundleIDs {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                return url
+            }
+        }
+        for path in target.fallbackPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+    }
+
+    private func openActiveItems(with target: AppTarget) {
+        let urls = activeTargetURLs()
+        guard !urls.isEmpty, let appURL = findApplicationURL(for: target) else {
+            logger.error("Failed to locate app \(target.name, privacy: .public)")
+            return
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: config) { _, error in
+            if let error {
+                logger.error("Failed to open with \(target.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func isRegularDirectory(_ url: URL) -> Bool {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey]
         let values = try? url.resourceValues(forKeys: keys)
         let isDirectory = values?.isDirectory ?? url.hasDirectoryPath
         let isPackage = values?.isPackage ?? false
+        return isDirectory && !isPackage
+    }
 
-        if isDirectory && !isPackage {
+    private func directoryPath(for url: URL) -> String {
+        if isRegularDirectory(url) {
             return normalizedPath(url)
         }
         return normalizedPath(url.deletingLastPathComponent())
@@ -135,6 +309,12 @@ final class FinderSyncExtension: FIFinderSync {
             return String(path.dropLast())
         }
         return path
+    }
+
+    private func encodeQueryValue(_ value: String) -> String? {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+/?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed)
     }
 
     private func copyToPasteboard(_ text: String) {

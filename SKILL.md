@@ -9,9 +9,11 @@ description: 在 macOS 访达（Finder）中一键部署、定制或卸载右键
 
 ## 当前内置模块
 
-- **copy-path**：
+- **copy-path（一键复制路径）**：
   - **FinderSync 扩展**（`/Applications/CopyPathFinder.app`）：在右键一级菜单直接显示「复制所在目录路径」「复制完整路径（含文件名）」以及空白处右键「复制当前文件夹路径」，支持本地磁盘与 `/Volumes` 外接磁盘。
   - **系统「服务」工作流**（`~/Library/Services/*.workflow`）：零编译依赖，可在右键「服务」子菜单调用，并支持在系统设置中绑定全局快捷键。
+- **IDE 与 AI 工具集成（自动检测本机已安装应用）**：
+  - 自动检测 **Antigravity IDE**、**Visual Studio Code**、**Claude**（发送到 Claude / 在此新建 Claude Code 会话）、**Codex**。未安装的应用在 FinderSync 中自动隐藏，在安装工作流时自动跳过。
 
 ## 安装指令
 

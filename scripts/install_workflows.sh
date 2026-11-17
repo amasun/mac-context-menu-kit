@@ -4,14 +4,31 @@ set -euo pipefail
 SERVICES_DIR="$HOME/Library/Services"
 mkdir -p "$SERVICES_DIR"
 
+detect_app() {
+    for app_name in "$@"; do
+        if [[ -d "/Applications/${app_name}.app" ]]; then
+            echo "/Applications/${app_name}.app"
+            return 0
+        fi
+        if [[ -d "$HOME/Applications/${app_name}.app" ]]; then
+            echo "$HOME/Applications/${app_name}.app"
+            return 0
+        fi
+    done
+    return 1
+}
+
 create_workflow() {
     local workflow_name="$1"
     local menu_title="$2"
     local description="$3"
     local script_content="$4"
-    local uuid1="$5"
-    local uuid2="$6"
-    local uuid3="$7"
+    local send_types_xml="$5"
+    local required_context_xml="${6:-}"
+    local uuid1 uuid2 uuid3
+    uuid1="$(uuidgen)"
+    uuid2="$(uuidgen)"
+    uuid3="$(uuidgen)"
 
     local wf_dir="$SERVICES_DIR/${workflow_name}.workflow/Contents"
     mkdir -p "$wf_dir"
@@ -31,11 +48,10 @@ create_workflow() {
             </dict>
             <key>NSMessage</key>
             <string>runWorkflowAsService</string>
+${required_context_xml}
             <key>NSSendFileTypes</key>
             <array>
-                <string>public.item</string>
-                <string>public.folder</string>
-                <string>public.directory</string>
+${send_types_xml}
             </array>
         </dict>
     </array>
@@ -260,6 +276,17 @@ EOF
 EOF
 }
 
+TYPES_ALL='                <string>public.item</string>
+                <string>public.folder</string>
+                <string>public.directory</string>'
+TYPES_FOLDER='                <string>public.folder</string>'
+FINDER_CONTEXT='            <key>NSRequiredContext</key>
+            <dict>
+                <key>NSApplicationIdentifier</key>
+                <string>com.apple.finder</string>
+            </dict>'
+
+# 1. 基础路径复制服务（始终安装）
 DIR_SCRIPT='export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 results=()
@@ -281,9 +308,7 @@ create_workflow \
     "复制所在目录路径" \
     "复制选中文件夹本身的路径，或选中文件所在的目录路径" \
     "$DIR_SCRIPT" \
-    "$(uuidgen)" \
-    "$(uuidgen)" \
-    "$(uuidgen)"
+    "$TYPES_ALL"
 
 FULL_SCRIPT='export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
@@ -300,14 +325,89 @@ create_workflow \
     "复制完整路径（含文件名）" \
     "复制选中文件或文件夹的完整路径（路径+名称）" \
     "$FULL_SCRIPT" \
-    "$(uuidgen)" \
-    "$(uuidgen)" \
-    "$(uuidgen)"
+    "$TYPES_ALL"
+
+echo "✅ 已安装基础路径复制服务："
+echo "   • 复制所在目录路径"
+echo "   • 复制完整路径（含文件名）"
+echo ""
+echo "🔍 正在检测本机已安装的 IDE / AI 应用..."
+
+# 2. Antigravity IDE
+if AGY_APP="$(detect_app "Antigravity IDE" "Antigravity")"; then
+    AGY_SCRIPT="for f in \"\$@\"
+do
+    open -a \"$AGY_APP\" \"\$f\"
+done"
+    create_workflow \
+        "Open with Antigravity IDE" \
+        "使用 Antigravity IDE 打开" \
+        "在 Antigravity IDE 中打开选中的项" \
+        "$AGY_SCRIPT" \
+        "$TYPES_ALL"
+    echo "   ✓ 检测到 Antigravity ($AGY_APP) → 已安装「使用 Antigravity IDE 打开」"
+else
+    echo "   - 未检测到 Antigravity IDE，已跳过"
+fi
+
+# 3. Visual Studio Code
+if VSCODE_APP="$(detect_app "Visual Studio Code" "Visual Studio Code - Insiders")"; then
+    VSCODE_SCRIPT="for f in \"\$@\"
+do
+    open -a \"$VSCODE_APP\" \"\$f\"
+done"
+    create_workflow \
+        "Open with VS Code" \
+        "使用 VS Code 打开" \
+        "在 VS Code 中打开选中的项" \
+        "$VSCODE_SCRIPT" \
+        "$TYPES_ALL"
+    echo "   ✓ 检测到 VS Code ($VSCODE_APP) → 已安装「使用 VS Code 打开」"
+else
+    echo "   - 未检测到 Visual Studio Code，已跳过"
+fi
+
+# 4. Claude Desktop
+if CLAUDE_APP="$(detect_app "Claude")"; then
+    CLAUDE_SEND_SCRIPT='q=""; for f in "${@:1:32}"; do k=file; [ -d "$f" ] &amp;&amp; k=folder; q="$q&amp;$k=$(V="$f" osascript -l JavaScript -e '\''ObjC.import("stdlib"); function run(){return encodeURIComponent($.getenv("V"))}'\'')"; done; open "claude://cowork/new?source=services$q"'
+    create_workflow \
+        "Claude - send" \
+        "发送到 Claude" \
+        "将选中的文件或文件夹发送到 Claude" \
+        "$CLAUDE_SEND_SCRIPT" \
+        "$TYPES_ALL"
+
+    CLAUDE_CODE_SCRIPT='u=$(V="$1" osascript -l JavaScript -e '\''ObjC.import("stdlib"); function run(){return encodeURIComponent($.getenv("V"))}'\''); open "claude://code/new?folder=$u&amp;source=services"'
+    create_workflow \
+        "Claude - codeHere" \
+        "在此新建 Claude Code 会话" \
+        "在选中文件夹中新建 Claude Code 会话" \
+        "$CLAUDE_CODE_SCRIPT" \
+        "$TYPES_FOLDER" \
+        "$FINDER_CONTEXT"
+
+    echo "   ✓ 检测到 Claude ($CLAUDE_APP) → 已安装「发送到 Claude」「在此新建 Claude Code 会话」"
+else
+    echo "   - 未检测到 Claude，已跳过"
+fi
+
+# 5. Codex
+if CODEX_APP="$(detect_app "Codex")"; then
+    CODEX_SCRIPT="for f in \"\$@\"
+do
+    open -a \"$CODEX_APP\" \"\$f\"
+done"
+    create_workflow \
+        "Open with Codex" \
+        "使用 Codex 打开" \
+        "在 Codex 中打开选中的项" \
+        "$CODEX_SCRIPT" \
+        "$TYPES_ALL"
+    echo "   ✓ 检测到 Codex ($CODEX_APP) → 已安装「使用 Codex 打开」"
+else
+    echo "   - 未检测到 Codex，已跳过"
+fi
 
 /System/Library/CoreServices/pbs -flush 2>/dev/null || true
 /System/Library/CoreServices/pbs -update 2>/dev/null || true
 killall Finder 2>/dev/null || true
-
-echo "✅ 系统「服务」工作流已安装到 $SERVICES_DIR："
-echo "  1. 复制所在目录路径.workflow"
-echo "  2. 复制完整路径（含文件名）.workflow"

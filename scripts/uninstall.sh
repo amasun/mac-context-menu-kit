@@ -15,6 +15,11 @@ fi
 if [[ "$MODE" == "workflow" || "$MODE" == "all" ]]; then
     rm -rf "$SERVICES_DIR/复制所在目录路径.workflow"
     rm -rf "$SERVICES_DIR/复制完整路径（含文件名）.workflow"
+    rm -rf "$SERVICES_DIR/Open with Antigravity IDE.workflow"
+    rm -rf "$SERVICES_DIR/Open with VS Code.workflow"
+    rm -rf "$SERVICES_DIR/Open with Codex.workflow"
+    rm -rf "$SERVICES_DIR/Claude - send.workflow"
+    rm -rf "$SERVICES_DIR/Claude - codeHere.workflow"
     /System/Library/CoreServices/pbs -flush 2>/dev/null || true
     /System/Library/CoreServices/pbs -update 2>/dev/null || true
     echo "✅ 已卸载系统「服务」工作流"
