@@ -88,6 +88,7 @@ rm -rf "$INSTALL_APP"
 cp -R "$APP_BUNDLE" "$INSTALL_APP"
 
 echo "🔄 注册并启用 FinderSync 扩展..."
+killall CopyPathFinderExtension 2>/dev/null || true
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$INSTALL_APP"
 pluginkit -a "$INSTALL_APP/Contents/PlugIns/CopyPathFinderExtension.appex"
 pluginkit -e use -i com.amasun.CopyPathFinder.Extension || true

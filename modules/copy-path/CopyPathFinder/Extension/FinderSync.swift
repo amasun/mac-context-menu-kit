@@ -42,14 +42,31 @@ final class FinderSyncExtension: FIFinderSync {
         "__pycache__", ".venv", "venv", "Pods", "DerivedData", ".DS_Store", ".Trash"
     ]
 
+    private var cachedTerminals: [(index: Int, title: String, symbol: String, url: URL)] = []
+    private var cachedIDEs: [(index: Int, title: String, symbol: String, url: URL)] = []
+    private var cachedClaudeURL: URL?
+
     override init() {
         super.init()
+        refreshInstalledAppsCache()
         updateMonitoredDirectories()
 
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(volumesChanged(_:)), name: NSWorkspace.didMountNotification, object: nil)
         center.addObserver(self, selector: #selector(volumesChanged(_:)), name: NSWorkspace.didUnmountNotification, object: nil)
-        logger.notice("FinderSyncExtension initialized")
+        logger.notice("FinderSyncExtension initialized, terminals=\(self.cachedTerminals.count), ides=\(self.cachedIDEs.count)")
+    }
+
+    private func refreshInstalledAppsCache() {
+        cachedTerminals = terminalTargets.enumerated().compactMap { idx, target in
+            guard let url = findApplicationURL(for: target) else { return nil }
+            return (idx, target.menuTitle, target.symbolName, url)
+        }
+        cachedIDEs = ideTargets.enumerated().compactMap { idx, target in
+            guard let url = findApplicationURL(for: target) else { return nil }
+            return (idx, target.menuTitle, target.symbolName, url)
+        }
+        cachedClaudeURL = findApplicationURL(for: claudeTarget)
     }
 
     @objc private func volumesChanged(_ notification: Notification) {
@@ -67,6 +84,7 @@ final class FinderSyncExtension: FIFinderSync {
     }
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
+        logger.notice("menu(for:) called with kind=\(menuKind.rawValue)")
         switch menuKind {
         case .contextualMenuForItems, .contextualMenuForContainer, .toolbarItemMenu:
             break
@@ -98,72 +116,53 @@ final class FinderSyncExtension: FIFinderSync {
             return menu.items.isEmpty ? nil : menu
         }
 
-        menu.addItem(NSMenuItem.separator())
-
-        // 2. AI 上下文子菜单
-        let aiContextSubmenu = NSMenu(title: "AI 上下文")
-
+        // 2. AI 上下文工具（直接扁平展示，避免 FinderSync 过滤 submenu）
         let treeItem = NSMenuItem(title: "复制目录树（Tree）", action: #selector(copyDirectoryTree(_:)), keyEquivalent: "")
         treeItem.image = NSImage(systemSymbolName: "list.bullet.indent", accessibilityDescription: nil)
-        aiContextSubmenu.addItem(treeItem)
+        menu.addItem(treeItem)
 
         let markdownItem = NSMenuItem(title: "复制为 AI 上下文（Markdown）", action: #selector(copyMarkdownContext(_:)), keyEquivalent: "")
         markdownItem.image = NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: nil)
-        aiContextSubmenu.addItem(markdownItem)
+        menu.addItem(markdownItem)
 
         let relPathItem = NSMenuItem(title: "复制 Git 相对路径", action: #selector(copyGitRelativePath(_:)), keyEquivalent: "")
         relPathItem.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)
-        aiContextSubmenu.addItem(relPathItem)
+        menu.addItem(relPathItem)
 
-        let aiContextMenuItem = NSMenuItem(title: "AI 上下文", action: nil, keyEquivalent: "")
-        aiContextMenuItem.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: nil)
-        aiContextMenuItem.submenu = aiContextSubmenu
-        menu.addItem(aiContextMenuItem)
+        // 3. 已检测到的终端 / IDE / Claude
+        var appItems: [NSMenuItem] = []
 
-        // 3. 在开发工具中打开子菜单（自动检测本机已安装应用）
-        let openWithSubmenu = NSMenu(title: "在开发工具中打开")
-
-        for (index, term) in terminalTargets.enumerated() {
-            if findApplicationURL(for: term) != nil {
-                let item = NSMenuItem(title: term.menuTitle, action: #selector(openInDetectedTerminal(_:)), keyEquivalent: "")
-                item.tag = index
-                item.image = NSImage(systemSymbolName: term.symbolName, accessibilityDescription: nil)
-                openWithSubmenu.addItem(item)
-            }
+        if let firstTerm = cachedTerminals.first {
+            let item = NSMenuItem(title: firstTerm.title, action: #selector(openInDetectedTerminal(_:)), keyEquivalent: "")
+            item.tag = firstTerm.index
+            item.image = NSImage(systemSymbolName: firstTerm.symbol, accessibilityDescription: nil)
+            appItems.append(item)
         }
 
-        if openWithSubmenu.items.count > 0 {
-            openWithSubmenu.addItem(NSMenuItem.separator())
+        for ide in cachedIDEs {
+            let item = NSMenuItem(title: ide.title, action: #selector(openInDetectedIDE(_:)), keyEquivalent: "")
+            item.tag = ide.index
+            item.image = NSImage(systemSymbolName: ide.symbol, accessibilityDescription: nil)
+            appItems.append(item)
         }
 
-        for (index, ide) in ideTargets.enumerated() {
-            if findApplicationURL(for: ide) != nil {
-                let item = NSMenuItem(title: ide.menuTitle, action: #selector(openInDetectedIDE(_:)), keyEquivalent: "")
-                item.tag = index
-                item.image = NSImage(systemSymbolName: ide.symbolName, accessibilityDescription: nil)
-                openWithSubmenu.addItem(item)
-            }
-        }
-
-        if findApplicationURL(for: claudeTarget) != nil {
-            openWithSubmenu.addItem(NSMenuItem.separator())
-
+        if cachedClaudeURL != nil {
             let sendItem = NSMenuItem(title: "发送到 Claude", action: #selector(sendToClaude(_:)), keyEquivalent: "")
             sendItem.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)
-            openWithSubmenu.addItem(sendItem)
+            appItems.append(sendItem)
 
             if let first = activeURLs.first, isRegularDirectory(first) {
                 let codeItem = NSMenuItem(title: "在此新建 Claude Code 会话", action: #selector(openClaudeCodeHere(_:)), keyEquivalent: "")
                 codeItem.image = NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: nil)
-                openWithSubmenu.addItem(codeItem)
+                appItems.append(codeItem)
             }
         }
 
-        if !openWithSubmenu.items.isEmpty {
-            let openWithMenuItem = NSMenuItem(title: "在开发工具中打开", action: nil, keyEquivalent: "")
-            openWithMenuItem.image = NSImage(systemSymbolName: "hammer", accessibilityDescription: nil)
-            openWithMenuItem.submenu = openWithSubmenu
-            menu.addItem(openWithMenuItem)
+        if !appItems.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+            for item in appItems {
+                menu.addItem(item)
+            }
         }
 
         return menu.items.isEmpty ? nil : menu
